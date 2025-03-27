@@ -1,1 +1,1 @@
-오픈소스SW설계 산출물 저장소 입니다.
+Conceptualization 문서가 저장되어 있습니다.
