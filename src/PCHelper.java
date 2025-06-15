@@ -1,21 +1,42 @@
-// PCHelper.java (단일 파일 버전)
+// PCHelper.java (단일 파일 최종 수정 버전)
 // 모든 클래스가 이 파일 하나에 포함되어 있습니다.
 
 import javax.swing.*;
-import javax.swing.table.DefaultTableModel;
+import javax.swing.event.*;
+import javax.swing.filechooser.*;
+import javax.swing.table.*;
 import java.awt.*;
+import java.awt.event.*;
 import java.io.*;
 import java.net.URI;
-import java.net.http.HttpClient;
-import java.net.http.HttpRequest;
-import java.net.http.HttpResponse;
-import java.nio.file.Files;
-import java.nio.file.Paths;
+import java.net.http.*;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.*;
+import java.text.SimpleDateFormat;
 import java.time.LocalDate;
 import java.time.temporal.ChronoUnit;
-import java.util.*;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.Date;
 import java.util.List;
+import java.util.concurrent.atomic.AtomicLong;
 
+// 각 유틸리티의 정보를 담는 데이터 클래스
+class UtilityInfo {
+    final String name;
+    final String path;
+    final boolean needsAdmin;
+    final String helpText;
+    final int difficulty;
+
+    UtilityInfo(String name, String path, boolean needsAdmin, String helpText, int difficulty) {
+        this.name = name;
+        this.path = path;
+        this.needsAdmin = needsAdmin;
+        this.helpText = helpText;
+        this.difficulty = difficulty;
+    }
+}
 
 // 메인 클래스. 프로그램의 시작점 역할을 합니다.
 public class PCHelper {
@@ -31,8 +52,8 @@ public class PCHelper {
         SwingUtilities.invokeLater(() -> {
             // 설계 문서의 Class Diagram을 기반으로 주요 객체 생성
             FileIOManager fileIOManager = new FileIOManager();
-            // 설계상 Gemini API를 사용하기로 함
-            APIManager apiManager = new APIManager("YOUR_GEMINI_API_KEY"); // TODO: 실제 Gemini API 키를 입력하세요.
+            String apiKey = fileIOManager.readApiKey(); // 파일에서 API 키 읽기
+            APIManager apiManager = new APIManager(apiKey);
             ExternalExecutor externalExecutor = new ExternalExecutor();
             NotificationManager notificationManager = new NotificationManager(fileIOManager);
             UtilityManager utilityManager = new UtilityManager(externalExecutor, apiManager, fileIOManager, notificationManager);
@@ -40,32 +61,24 @@ public class PCHelper {
             // 시스템 트레이 아이콘 설정
             if (!SystemTray.isSupported()) {
                 System.err.println("시스템 트레이를 지원하지 않습니다.");
-                // 트레이를 지원하지 않으면 바로 메인 GUI를 띄웁니다.
-                utilityManager.showGUI(0);
+                utilityManager.showGUI(0); // 트레이를 지원하지 않으면 바로 메인 GUI 표시
                 return;
             }
 
-            // 트레이 아이콘 클릭 시 나타날 팝업 메뉴 생성
             PopupMenu trayMenu = new PopupMenu();
             MenuItem showItem = new MenuItem("PC HELPER 열기");
-            showItem.addActionListener(e -> utilityManager.showGUI(0)); // 메인 페이지 열기
+            showItem.addActionListener(e -> utilityManager.showGUI(0));
 
             MenuItem exitItem = new MenuItem("종료");
-            exitItem.addActionListener(e -> {
-                System.out.println("프로그램을 종료합니다.");
-                System.exit(0); // 프로그램 완전 종료
-            });
+            exitItem.addActionListener(e -> System.exit(0));
 
             trayMenu.add(showItem);
             trayMenu.addSeparator();
             trayMenu.add(exitItem);
 
-            // 아이콘 이미지 로드 (실행 파일과 같은 경로에 icon.png 파일이 필요합니다)
             Image image = new ImageIcon("icon.png", "PC Helper 아이콘").getImage().getScaledInstance(16, 16, Image.SCALE_SMOOTH);
             TrayIcon trayIcon = new TrayIcon(image, "PC HELPER", trayMenu);
             trayIcon.setImageAutoSize(true);
-
-            // 트레이 아이콘 자체를 클릭(왼쪽 클릭)했을 때의 동작
             trayIcon.addActionListener(e -> utilityManager.showGUI(0));
 
             try {
@@ -75,34 +88,28 @@ public class PCHelper {
                 System.err.println("트레이 아이콘을 추가할 수 없습니다.");
             }
 
-            // 설계에 따라 PC 관리 주기와 이벤트 로그 스캔 주기를 관리할 타이머 생성
-            Timer manageTimer = new Timer("manageTimer", 30); // 30일 주기로 PC 정리 알림
-            Timer scanTimer = new Timer("scanTimer", 1);      // 1일 주기로 이벤트 로그 스캔
+            // 타이머 생성
+            Timer manageTimer = new Timer("manageTimer", 30);
+            Timer scanTimer = new Timer("scanTimer", 1);
 
-            // 백그라운드에서 주기적으로 타이머를 체크하는 스레드 실행
+            // 백그라운드 스레드 실행
             new Thread(() -> {
                 while (true) {
                     try {
-                        // Use Case #3: 컴퓨터 관리 알림
                         if (manageTimer.checkTimer()) {
-                            System.out.println("관리 타이머 만료. 알림 표시 시도.");
                             notificationManager.showManagementReminder(utilityManager);
                             manageTimer.resetTimer();
                         }
-
-                        // Use Case #5: 오류 알림
                         if (scanTimer.checkTimer()) {
-                            System.out.println("오류 스캔 타이머 만료. 스캔 시작.");
                             List<String> errors = fileIOManager.scanEvtForErrors();
                             if (!errors.isEmpty()) {
                                 notificationManager.showErrorNotification(utilityManager, errors);
                             }
                             scanTimer.resetTimer();
                         }
-
-                        // 1시간마다 체크 (3600 * 1000 밀리초)
-                        Thread.sleep(3600 * 1000);
+                        Thread.sleep(3600 * 1000); // 1시간마다 체크
                     } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt();
                         e.printStackTrace();
                     }
                 }
@@ -118,43 +125,49 @@ class UtilityManager {
     private final ExternalExecutor exe;
     private final APIManager aiQuery;
     private final FileIOManager fileIOManager;
-    private final NotificationManager notificationManager;
     private JFrame mainFrame;
+    private SwingWorker<?, ?> currentWorker = null;
+    private List<? extends RowSorter.SortKey> cleanerSortKeys; // 파일 정리기 정렬 상태 저장
 
     public UtilityManager(ExternalExecutor exe, APIManager aiQuery, FileIOManager fileIOManager, NotificationManager notificationManager) {
         this.exe = exe;
         this.aiQuery = aiQuery;
         this.fileIOManager = fileIOManager;
-        this.notificationManager = notificationManager;
     }
 
     public void showGUI(int pageNum) {
-        if (mainFrame != null && mainFrame.isShowing()) {
-            mainFrame.toFront();
-        } else {
+        if (mainFrame == null) {
             mainFrame = new JFrame();
             mainFrame.setSize(800, 600);
             mainFrame.setDefaultCloseOperation(JFrame.DISPOSE_ON_CLOSE);
             mainFrame.setLocationRelativeTo(null);
         }
+        mainFrame.setVisible(true);
+        mainFrame.toFront();
+
+        // 페이지 전환 시 진행중이던 작업 취소
+        if (currentWorker != null && !currentWorker.isDone()) {
+            currentWorker.cancel(true);
+        }
 
         switch (pageNum) {
-            case 1:
-                showToolBox();
-                break;
-            case 2:
-                showAIHelper();
-                break;
-            case 3:
-                showCleaner();
-                break; // 파일 정리 기능
-            default:
-                showMainPage();
-                break;
+            case 1: showToolBox(); break;
+            case 2: showAIHelper(); break;
+            case 3: showCleaner(); break;
+            case 4: showErrorLog(fileIOManager.getSavedErrors()); break;
+            default: showMainPage(); break;
         }
-        mainFrame.setVisible(true);
+    }
+
+    private void refreshUI() {
         mainFrame.revalidate();
         mainFrame.repaint();
+    }
+
+    private JButton createBackButton(Runnable action) {
+        JButton backButton = new JButton("뒤로 가기");
+        backButton.addActionListener(e -> action.run());
+        return backButton;
     }
 
     private void showMainPage() {
@@ -173,31 +186,57 @@ class UtilityManager {
 
         GridBagConstraints gbc = new GridBagConstraints();
         gbc.insets = new Insets(10, 10, 10, 10);
-        gbc.gridx = 0;
-        gbc.gridy = 0;
         pane.add(toolboxButton, gbc);
         gbc.gridy = 1;
         pane.add(aiButton, gbc);
+
+        refreshUI();
     }
 
-    // Use Case #2: 도구상자
     private void showToolBox() {
         mainFrame.setTitle("PC HELPER - 도구 상자");
         Container pane = mainFrame.getContentPane();
         pane.removeAll();
-        pane.setLayout(new GridLayout(0, 1, 5, 5));
 
-        // UI 프로토타입에 명시된 유틸리티 목록과 색상별 난이도 적용
-        addToolBoxButton("오류 기록 보기", new Color(173, 216, 230), "저장된 시스템 오류 기록을 확인합니다.", () -> showErrorLog(fileIOManager.getSavedErrors()));
-        addToolBoxButton("디스크 정리", new Color(173, 216, 230), "Windows 디스크 정리 유틸리티를 실행합니다.", () -> exe.executeUtility(1));
-        addToolBoxButton("사용자 파일 정리", new Color(144, 238, 144), "불필요한 파일을 찾아 정리합니다.", () -> showCleaner());
-        addToolBoxButton("디스크 조각 모음 및 최적화", new Color(144, 238, 144), "디스크를 최적화하여 성능을 향상시킵니다.", () -> exe.executeUtility(2));
-        addToolBoxButton("장치 관리자", new Color(255, 228, 181), "하드웨어 장치를 관리합니다.", () -> exe.executeUtility(3));
-        addToolBoxButton("작업 관리자", new Color(255, 228, 181), "현재 실행 중인 프로세스를 확인하고 관리합니다.", () -> exe.executeUtility(4));
-        addToolBoxButton("레지스트리 편집기", new Color(255, 182, 193), "주의: 시스템 설정을 직접 수정하는 전문가용 도구입니다.", () -> exe.executeUtility(5));
+        JPanel contentPanel = new JPanel();
+        contentPanel.setLayout(new GridLayout(0, 1, 5, 5));
+
+        // utils.txt 파일에서 유틸리티 목록 읽어오기
+        List<UtilityInfo> utilities = fileIOManager.readUtilities();
+
+        for (UtilityInfo util : utilities) {
+            Color color;
+            switch (util.difficulty) {
+                case 1: color = new Color(173, 216, 230); break; // 쉬움
+                case 2: color = new Color(144, 238, 144); break; // 보통
+                case 3: color = new Color(255, 228, 181); break; // 어려움
+                case 4: color = new Color(255, 182, 193); break; // 전문가
+                default: color = Color.LIGHT_GRAY;
+            }
+
+            // 각 버튼에 대한 액션 생성
+            Runnable action = () -> {
+                if ("showErrorLog".equalsIgnoreCase(util.path)) {
+                    showErrorLog(fileIOManager.getSavedErrors());
+                } else if ("showCleaner".equalsIgnoreCase(util.path)) {
+                    showCleaner();
+                } else {
+                    // 외부 프로그램 실행
+                    boolean isExpert = (util.difficulty == 4);
+                    exe.execute(util.path, util.needsAdmin, isExpert);
+                }
+            };
+            addToolBoxButton(contentPanel, util.name, color, util.helpText, action);
+        }
+
+        pane.setLayout(new BorderLayout());
+        pane.add(new JScrollPane(contentPanel), BorderLayout.CENTER);
+        pane.add(createBackButton(this::showMainPage), BorderLayout.SOUTH);
+
+        refreshUI();
     }
 
-    private void addToolBoxButton(String name, Color color, String helpText, Runnable action) {
+    private void addToolBoxButton(JPanel parent, String name, Color color, String helpText, Runnable action) {
         JPanel panel = new JPanel(new BorderLayout(10, 0));
         panel.setBorder(BorderFactory.createEmptyBorder(5, 10, 5, 10));
         JButton button = new JButton(name);
@@ -214,10 +253,9 @@ class UtilityManager {
 
         panel.add(button, BorderLayout.CENTER);
         panel.add(helpButton, BorderLayout.EAST);
-        mainFrame.getContentPane().add(panel);
+        parent.add(panel);
     }
 
-    // Use Case #4: AI에게 질문하기
     private void showAIHelper() {
         mainFrame.setTitle("PC HELPER - AI 도우미");
         Container pane = mainFrame.getContentPane();
@@ -230,77 +268,235 @@ class UtilityManager {
         chatArea.setLineWrap(true);
         chatArea.setWrapStyleWord(true);
 
-        JTextField inputField = new JTextField();
-        inputField.setFont(new Font("Malgun Gothic", Font.PLAIN, 14));
+        JTextArea inputArea = new JTextArea(3, 20); // 3줄 높이, 20컬럼 너비의 입력창
+        inputArea.setFont(new Font("Malgun Gothic", Font.PLAIN, 14));
+        inputArea.setLineWrap(true);
+        inputArea.setWrapStyleWord(true);
+        inputArea.setBackground(new Color(240, 240, 240)); // 회색 배경
+        JScrollPane inputScrollPane = new JScrollPane(inputArea);
 
-        inputField.addActionListener(e -> {
-            String userText = inputField.getText();
+        JButton sendButton = new JButton("전송");
+        sendButton.addActionListener(e -> {
+            String userText = inputArea.getText();
             if (userText.trim().isEmpty()) return;
 
             chatArea.append("사용자: " + userText + "\n\n");
-            inputField.setText("");
+            inputArea.setText("");
 
-            // API 매니저를 호출하여 LLM의 답변을 받아옴 (백그라운드 스레드에서)
             new Thread(() -> {
                 String response = aiQuery.sendQuery(userText);
                 SwingUtilities.invokeLater(() -> chatArea.append("AI 도우미: " + response + "\n\n"));
             }).start();
         });
 
+        JPanel bottomPanel = new JPanel(new BorderLayout());
+        bottomPanel.add(inputScrollPane, BorderLayout.CENTER);
+        bottomPanel.add(sendButton, BorderLayout.EAST);
+
         pane.add(new JScrollPane(chatArea), BorderLayout.CENTER);
-        pane.add(inputField, BorderLayout.SOUTH);
+        pane.add(bottomPanel, BorderLayout.SOUTH);
+        pane.add(createBackButton(this::showMainPage), BorderLayout.NORTH);
+
+        refreshUI();
     }
 
-    // Use Case #6: 파일 정리 기능
-    private void showCleaner() {
-        mainFrame.setTitle("PC HELPER - 파일 정리");
-        Container pane = mainFrame.getContentPane();
+    private void updateCleanerUI(Container pane, File directory) {
+        CardLayout cardLayout = new CardLayout();
+        JPanel mainPanel = new JPanel(cardLayout);
+
+        // 로딩 패널
+        JPanel loadingPanel = new JPanel(new GridBagLayout());
+        JLabel loadingLabel = new JLabel("파일 목록을 읽는 중입니다...");
+        loadingLabel.setFont(new Font("Malgun Gothic", Font.BOLD, 16));
+        JProgressBar progressBar = new JProgressBar();
+        progressBar.setIndeterminate(true);
+
+        JButton cancelButton = new JButton("취소");
+
+        JPanel loadingContent = new JPanel();
+        loadingContent.setLayout(new BoxLayout(loadingContent, BoxLayout.Y_AXIS));
+        loadingContent.add(loadingLabel);
+        loadingContent.add(Box.createRigidArea(new Dimension(0, 10)));
+        loadingContent.add(progressBar);
+        loadingContent.add(Box.createRigidArea(new Dimension(0, 10)));
+        loadingContent.add(cancelButton);
+        loadingPanel.add(loadingContent);
+
+        // 파일 목록 패널
+        JPanel fileListPanel = new JPanel(new BorderLayout(5, 5));
+
+        mainPanel.add(loadingPanel, "loading");
+        mainPanel.add(fileListPanel, "files");
+
         pane.removeAll();
-        pane.setLayout(new BorderLayout(5, 5));
+        pane.add(mainPanel, BorderLayout.CENTER);
+        cardLayout.show(mainPanel, "loading");
+        refreshUI();
 
-        File userHome = new File(System.getProperty("user.home"));
-
-        String[] columnNames = {"이름", "크기", "경로"};
-        DefaultTableModel tableModel = new DefaultTableModel(columnNames, 0) {
+        currentWorker = new SwingWorker<List<File>, Void>() {
             @Override
-            public boolean isCellEditable(int row, int column) {
-                return false;
+            protected List<File> doInBackground() throws Exception {
+                return fileIOManager.scanDirectory(directory);
+            }
+            @Override
+            protected void done() {
+                if (isCancelled()) {
+                    showToolBox();
+                    return;
+                }
+                try {
+                    List<File> files = get();
+                    setupCleanerUI(fileListPanel, directory, files);
+                    cardLayout.show(mainPanel, "files");
+                } catch (Exception e) {
+                    e.printStackTrace();
+                    cardLayout.show(mainPanel, "files");
+                }
             }
         };
-        JTable table = new JTable(tableModel);
-        table.setFillsViewportHeight(true);
 
-        // 파일 스캔은 오래 걸릴 수 있으므로 백그라운드 스레드에서 실행
-        new Thread(() -> {
-            fileIOManager.scanDirectory(userHome, tableModel);
-        }).start();
+        cancelButton.addActionListener(e -> currentWorker.cancel(true));
+        currentWorker.execute();
+    }
 
-        JScrollPane scrollPane = new JScrollPane(table);
+    private void setupCleanerUI(JPanel panel, File directory, List<File> files) {
+        panel.removeAll();
 
-        JPanel buttonPanel = new JPanel();
-        JButton deleteButton = new JButton("선택한 파일 삭제");
-        deleteButton.addActionListener(e -> {
-            int[] selectedRows = table.getSelectedRows();
-            if (selectedRows.length > 0) {
-                int confirm = JOptionPane.showConfirmDialog(mainFrame, "선택한 " + selectedRows.length + "개의 항목을 정말 삭제하시겠습니까?\n이 작업은 되돌릴 수 없습니다.", "삭제 확인", JOptionPane.YES_NO_OPTION);
-                if (confirm == JOptionPane.YES_OPTION) {
-                    for (int i = selectedRows.length - 1; i >= 0; i--) {
-                        String path = (String) tableModel.getValueAt(selectedRows[i], 2);
-                        fileIOManager.deleteFile(new File(path));
-                        tableModel.removeRow(selectedRows[i]);
-                    }
+        // 상단 컨트롤 패널
+        JPanel topPanel = new JPanel(new BorderLayout());
+        JTextField pathField = new JTextField(directory.getAbsolutePath());
+        pathField.setEditable(false);
+        JButton upButton = new JButton("위로");
+        upButton.setEnabled(directory.getParentFile() != null);
+        upButton.addActionListener(e -> updateCleanerUI(mainFrame.getContentPane(), directory.getParentFile()));
+        topPanel.add(upButton, BorderLayout.WEST);
+        topPanel.add(pathField, BorderLayout.CENTER);
+
+        // 하단 컨트롤 패널
+        JPanel controlPanel = new JPanel(new FlowLayout(FlowLayout.LEFT));
+        JButton sortByName = new JButton("이름순"), sortBySize = new JButton("크기순"), sortByDate = new JButton("날짜순"), deleteButton = new JButton("선택 파일 삭제");
+        controlPanel.add(sortByName);
+        controlPanel.add(sortBySize);
+        controlPanel.add(sortByDate);
+        controlPanel.add(deleteButton);
+
+        String[] columnNames = {"선택", "이름", "크기", "수정 날짜"};
+        DefaultTableModel tableModel = new DefaultTableModel(null, columnNames) {
+            @Override
+            public Class<?> getColumnClass(int columnIndex) {
+                switch (columnIndex) {
+                    case 0: return Boolean.class;
+                    case 1: return File.class;
+                    case 2:
+                    case 3: return Long.class;
+                    default: return Object.class;
                 }
-            } else {
-                JOptionPane.showMessageDialog(mainFrame, "삭제할 파일을 선택해주세요.");
+            }
+            @Override
+            public boolean isCellEditable(int row, int column) { return column == 0; }
+        };
+        JTable table = new JTable(tableModel);
+        table.setRowHeight(24);
+        table.getColumnModel().getColumn(0).setPreferredWidth(50);
+        table.getColumnModel().getColumn(0).setMaxWidth(50);
+
+        AtomicLong maxFileSize = new AtomicLong(0);
+        table.getColumnModel().getColumn(1).setCellRenderer(new FileCellRenderer());
+        table.getColumnModel().getColumn(2).setCellRenderer(new SizeBarRenderer(maxFileSize));
+        table.getColumnModel().getColumn(3).setCellRenderer(new DateCellRenderer());
+
+        TableRowSorter<DefaultTableModel> sorter = new TableRowSorter<>(tableModel);
+        table.setRowSorter(sorter);
+
+        // 정렬 상태 유지
+        if (cleanerSortKeys != null) {
+            sorter.setSortKeys(cleanerSortKeys);
+        }
+        sorter.addRowSorterListener(e -> {
+            if (e.getType() == RowSorterEvent.Type.SORT_ORDER_CHANGED) {
+                cleanerSortKeys = sorter.getSortKeys();
             }
         });
 
-        buttonPanel.add(deleteButton);
-        pane.add(scrollPane, BorderLayout.CENTER);
-        pane.add(buttonPanel, BorderLayout.SOUTH);
+        sortByName.addActionListener(e -> sorter.setSortKeys(List.of(new RowSorter.SortKey(1, SortOrder.ASCENDING))));
+        sortBySize.addActionListener(e -> sorter.setSortKeys(List.of(new RowSorter.SortKey(2, SortOrder.DESCENDING))));
+        sortByDate.addActionListener(e -> sorter.setSortKeys(List.of(new RowSorter.SortKey(3, SortOrder.DESCENDING))));
+
+        table.addMouseListener(new MouseAdapter() {
+            public void mouseClicked(MouseEvent e) {
+                if (e.getClickCount() == 2) {
+                    int row = table.convertRowIndexToModel(table.getSelectedRow());
+                    File file = (File) tableModel.getValueAt(row, 1);
+                    if (file.isDirectory()) {
+                        updateCleanerUI(mainFrame.getContentPane(), file);
+                    }
+                }
+            }
+        });
+
+        deleteButton.addActionListener(e -> {
+            int confirm = JOptionPane.showConfirmDialog(mainFrame, "선택한 항목들을 정말 삭제하시겠습니까?\n이 작업은 되돌릴 수 없습니다.", "삭제 확인", JOptionPane.YES_NO_OPTION);
+            if (confirm == JOptionPane.YES_OPTION) {
+                for (int i = tableModel.getRowCount() - 1; i >= 0; i--) {
+                    if ((Boolean) tableModel.getValueAt(i, 0)) {
+                        fileIOManager.deleteFile((File) tableModel.getValueAt(i, 1));
+                        tableModel.removeRow(i);
+                    }
+                }
+            }
+        });
+
+        panel.add(topPanel, BorderLayout.NORTH);
+        panel.add(new JScrollPane(table), BorderLayout.CENTER);
+        JPanel bottomPanel = new JPanel(new BorderLayout());
+        bottomPanel.add(controlPanel, BorderLayout.CENTER);
+        bottomPanel.add(createBackButton(this::showToolBox), BorderLayout.EAST);
+        panel.add(bottomPanel, BorderLayout.SOUTH);
+
+        tableModel.setRowCount(0);
+        for (File file : files) {
+            tableModel.addRow(new Object[]{false, file, -1L, file.lastModified()});
+        }
+
+        currentWorker = new SwingWorker<Void, Object[]>() {
+            @Override
+            protected Void doInBackground() throws Exception {
+                long currentMax = 0;
+                for (int i = 0; i < files.size(); i++) {
+                    if (isCancelled()) break;
+                    File file = files.get(i);
+                    long size = fileIOManager.getFileSize(file);
+                    if (size > currentMax) currentMax = size;
+                    publish(new Object[]{i, size});
+                }
+                maxFileSize.set(currentMax);
+                return null;
+            }
+
+            @Override
+            protected void process(List<Object[]> chunks) {
+                for (Object[] chunk : chunks) {
+                    tableModel.setValueAt(chunk[1], (Integer) chunk[0], 2);
+                }
+            }
+
+            @Override
+            protected void done() {
+                if (!isCancelled()) {
+                    table.repaint();
+                }
+            }
+        };
+        currentWorker.execute();
+
+        refreshUI();
     }
 
-    // 저장된 오류 기록을 보여주는 기능
+    private void showCleaner() {
+        mainFrame.setTitle("PC HELPER - 파일 정리");
+        updateCleanerUI(mainFrame.getContentPane(), new File(System.getProperty("user.home")));
+    }
+
     private void showErrorLog(List<String> errors) {
         mainFrame.setTitle("PC HELPER - 오류 기록 보기");
         Container pane = mainFrame.getContentPane();
@@ -319,58 +515,39 @@ class UtilityManager {
             }
             errorArea.setText(sb.toString());
         }
+
         pane.add(new JScrollPane(errorArea), BorderLayout.CENTER);
+        pane.add(createBackButton(this::showToolBox), BorderLayout.SOUTH);
+
+        refreshUI();
     }
 }
 
 // 프로그램의 모든 알림 기능을 담당하는 클래스
 class NotificationManager {
-    private final FileIOManager fileIOManager;
     private TrayIcon trayIcon;
+    private final FileIOManager fileIOManager;
 
-    public NotificationManager(FileIOManager fileIOManager) {
-        this.fileIOManager = fileIOManager;
-    }
+    public NotificationManager(FileIOManager fileIOManager) { this.fileIOManager = fileIOManager; }
+    public void setTrayIcon(TrayIcon trayIcon) { this.trayIcon = trayIcon; }
 
-    public void setTrayIcon(TrayIcon trayIcon) {
-        this.trayIcon = trayIcon;
-    }
-
-    // Use Case #3: 컴퓨터 관리 알림
     public void showManagementReminder(UtilityManager utilityManager) {
-        // 설계에 따라 전체화면 프로그램 실행 중에는 알림을 유예하는 로직 추가 가능
         String message = "컴퓨터 정리를 안 한지 30일이 지났습니다!";
         String[] options = {"도구 상자 열기", "다음에 알림"};
-
-        int choice = JOptionPane.showOptionDialog(
-                null, message, "PC 관리 알림",
-                JOptionPane.YES_NO_OPTION, JOptionPane.INFORMATION_MESSAGE,
-                null, options, options[0]);
-
-        if (choice == 0) { // "도구 상자 열기" 선택
-            utilityManager.showGUI(1);
-        }
+        int choice = JOptionPane.showOptionDialog(null, message, "PC 관리 알림", JOptionPane.YES_NO_OPTION, JOptionPane.INFORMATION_MESSAGE, null, options, options[0]);
+        if (choice == 0) utilityManager.showGUI(1);
     }
 
-    // Use Case #5: 오류 알림
     public void showErrorNotification(UtilityManager utilityManager, List<String> errors) {
-        fileIOManager.saveErrors(errors); // 발견된 오류를 파일에 저장
+        fileIOManager.saveErrors(errors);
         String message = "컴퓨터에 심각한 오류 기록이 있습니다!";
-
-        // 트레이 아이콘을 사용할 수 있으면 트레이 메시지 표시
         if (trayIcon != null) {
             trayIcon.displayMessage("오류 알림", message, TrayIcon.MessageType.ERROR);
-            trayIcon.addActionListener(e -> utilityManager.showGUI(1)); // 클릭 시 도구 상자 표시
-        } else { // 트레이를 사용할 수 없으면 JOptionPane으로 표시
-            String[] options = {"AI에게 물어보기", "나중에 보기"};
-            int choice = JOptionPane.showOptionDialog(
-                    null, message, "오류 알림",
-                    JOptionPane.YES_NO_OPTION, JOptionPane.ERROR_MESSAGE,
-                    null, options, options[0]);
-
-            if (choice == 0) { // "AI에게 물어보기" 선택
-                utilityManager.showGUI(2);
-            }
+            trayIcon.addActionListener(e -> utilityManager.showGUI(4));
+        } else {
+            String[] options = {"오류 기록 보기", "나중에 보기"};
+            int choice = JOptionPane.showOptionDialog(null, message, "오류 알림", JOptionPane.YES_NO_OPTION, JOptionPane.ERROR_MESSAGE, null, options, options[0]);
+            if (choice == 0) utilityManager.showGUI(4);
         }
     }
 }
@@ -378,7 +555,6 @@ class NotificationManager {
 // 외부 LLM API(Gemini)와의 통신을 관리하는 클래스
 class APIManager {
     private final String apiKey;
-    // 프롬프트 엔지니어링: LLM의 환각 현상을 줄이고 역할에 맞는 답변을 유도
     private final String promptSuffix;
 
     public APIManager(String apiKey) {
@@ -386,17 +562,13 @@ class APIManager {
         this.promptSuffix = " (당신은 PC 문제 해결 전문가입니다. 한국어로 친절하고 명확하게 설명해주세요.)";
     }
 
-    // LLM에 질문을 보내고 답변을 반환하는 메소드
     public String sendQuery(String prompt) {
-        if (apiKey == null || apiKey.equals("YOUR_GEMINI_API_KEY") || apiKey.trim().isEmpty()) {
-            return "Gemini API 키가 설정되지 않았습니다. PCHelper.java 파일에서 API 키를 설정해주세요.";
+        if (apiKey == null || apiKey.trim().isEmpty()) {
+            return "API 키가 설정되지 않았습니다. 프로그램 폴더에 APIKey.txt 파일을 생성하고 키를 입력해주세요.";
         }
 
-        // Gemini API 엔드포인트
         String url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent?key=" + apiKey;
-
-        // API 요청 본문(Body) 생성 (JSON 형식, 특수문자 이스케이프 처리)
-        String escapedPrompt = prompt.replace("\"", "\\\"");
+        String escapedPrompt = prompt.replace("\"", "\\\"").replace("\n", "\\n");
         String jsonBody = "{\"contents\":[{\"parts\":[{\"text\":\"" + escapedPrompt + promptSuffix + "\"}]}]}";
 
         try {
@@ -407,173 +579,209 @@ class APIManager {
                     .POST(HttpRequest.BodyPublishers.ofString(jsonBody))
                     .build();
 
-            HttpResponse<String> response = client.send(request, HttpResponse.BodyHandlers.ofString());
+            HttpResponse<String> response = client.send(request, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
 
-            // 응답 파싱 (단순화를 위해 기본적인 파싱만 수행)
-            // 실제 프로젝트에서는 JSON 라이브러리(Gson, Jackson 등) 사용을 권장합니다.
             if (response.statusCode() == 200) {
                 String responseBody = response.body();
-                // "text": "..." 부분을 추출
                 int startIndex = responseBody.indexOf("\"text\": \"") + 9;
                 int endIndex = responseBody.lastIndexOf("\"");
                 if (startIndex > 8 && endIndex > startIndex) {
                     return responseBody.substring(startIndex, endIndex).replace("\\n", "\n");
                 }
-                return "답변을 파싱하는 데 실패했습니다.";
+                return "답변을 파싱하는 데 실패했습니다: " + responseBody;
             } else {
-                return "API 호출에 실패했습니다. 상태 코드: " + response.statusCode() + "\n" + response.body();
+                return "API 호출 실패. 상태 코드: " + response.statusCode() + "\n" + response.body();
             }
         } catch (Exception e) {
             e.printStackTrace();
-            return "API 요청 중 오류가 발생했습니다: " + e.getMessage();
+            return "API 요청 중 오류 발생: " + e.getMessage();
         }
     }
 }
 
-// 파일 읽기, 쓰기, 삭제 및 Windows 이벤트 로그 스캔 등 파일 시스템 관련 작업을 담당하는 클래스
+// 파일 시스템 관련 작업을 담당하는 클래스
 class FileIOManager {
-    private final String errorLogFile = "error_log.dat";
     private List<String> savedErrors = new ArrayList<>();
+    private final String errorLogFile = "error_log.dat";
 
     public FileIOManager() {
         loadErrors();
+        createDefaultUtilsFileIfNeeded();
     }
 
-    // Windows 이벤트 로그를 스캔하여 심각한 오류를 찾아 반환
-    public List<String> scanEvtForErrors() {
-        List<String> criticalErrors = new ArrayList<>();
-        // Windows 'wevtutil' 명령어를 사용하여 지난 24시간 동안의 '심각(Level=1)' 오류를 조회
-        String command = "wevtutil qe System /q:\"*[System[(Level=1) and TimeCreated[timediff(@SystemTime) <= 86400000]]]\" /c:5 /f:text";
-
+    public String readApiKey() {
         try {
-            Process process = Runtime.getRuntime().exec(command);
-            BufferedReader reader = new BufferedReader(new InputStreamReader(process.getInputStream()));
+            return Files.readString(Paths.get("APIKey.txt"), StandardCharsets.UTF_8);
+        } catch (IOException e) {
+            System.err.println("APIKey.txt 파일을 찾을 수 없습니다.");
+            return null;
+        }
+    }
+
+    public List<UtilityInfo> readUtilities() {
+        File utilsFile = new File("utils.txt");
+        List<UtilityInfo> utilities = new ArrayList<>();
+        try (BufferedReader reader = new BufferedReader(new FileReader(utilsFile, StandardCharsets.UTF_8))) {
             String line;
             while ((line = reader.readLine()) != null) {
-                criticalErrors.add(line);
+                if (line.trim().isEmpty() || line.startsWith("#")) continue;
+                String[] parts = line.split(",", 5);
+                if (parts.length == 5) {
+                    boolean needsAdmin = "1".equals(parts[2].trim());
+                    utilities.add(new UtilityInfo(parts[0].trim(), parts[1].trim(), needsAdmin, parts[3].trim(), Integer.parseInt(parts[4].trim())));
+                }
+            }
+        } catch (IOException | NumberFormatException e) {
+            e.printStackTrace();
+            JOptionPane.showMessageDialog(null, "utils.txt 파일을 읽는 중 오류 발생.", "파일 오류", JOptionPane.ERROR_MESSAGE);
+        }
+        return utilities;
+    }
+
+    private void createDefaultUtilsFileIfNeeded() {
+        File utilsFile = new File("utils.txt");
+        if (!utilsFile.exists()) {
+            try (PrintWriter writer = new PrintWriter(new FileWriter(utilsFile, StandardCharsets.UTF_8))) {
+                writer.println("# 유틸리티 목록: 이름,경로,관리자권한(1=필요),도움말,난이도(1~4)");
+                writer.println("오류 기록 보기,showErrorLog,0,저장된 시스템 오류 기록을 확인합니다.,1");
+                writer.println("디스크 정리,cleanmgr.exe,0,Windows 디스크 정리 유틸리티를 실행합니다.,1");
+                writer.println("사용자 파일 정리,showCleaner,0,불필요한 파일을 찾아 정리합니다.,2");
+                writer.println("디스크 조각 모음 및 최적화,dfrgui.exe,1,디스크를 최적화하여 성능을 향상시킵니다.,2");
+                writer.println("장치 관리자,mmc.exe devmgmt.msc,1,하드웨어 장치를 관리합니다.,3");
+                writer.println("작업 관리자,taskmgr.exe,0,현재 실행 중인 프로세스를 확인하고 관리합니다.,3");
+                writer.println("레지스트리 편집기,regedit.exe,1,주의: 시스템 설정을 직접 수정하는 전문가용 도구입니다.,4");
+            } catch (IOException e) {
+                e.printStackTrace();
+            }
+        }
+    }
+
+    public List<String> scanEvtForErrors() {
+        List<String> errors = new ArrayList<>();
+        String command = "wevtutil qe System /q:\"*[System[(Level=1) and TimeCreated[timediff(@SystemTime) <= 86400000]]]\" /c:5 /f:text";
+        try {
+            Process process = Runtime.getRuntime().exec(command);
+            try (BufferedReader reader = new BufferedReader(new InputStreamReader(process.getInputStream()))) {
+                String line;
+                while ((line = reader.readLine()) != null) errors.add(line);
             }
             process.waitFor();
         } catch (Exception e) {
-            System.err.println("이벤트 로그 스캔 중 오류 발생: " + e.getMessage());
+            System.err.println("이벤트 로그 스캔 오류: " + e.getMessage());
         }
-        return criticalErrors;
+        return errors;
     }
 
     public void saveErrors(List<String> errors) {
         this.savedErrors.addAll(errors);
         try (ObjectOutputStream oos = new ObjectOutputStream(new FileOutputStream(errorLogFile))) {
             oos.writeObject(this.savedErrors);
-        } catch (IOException e) {
-            e.printStackTrace();
-        }
+        } catch (IOException e) { e.printStackTrace(); }
     }
 
     @SuppressWarnings("unchecked")
     private void loadErrors() {
-        File file = new File(errorLogFile);
-        if (file.exists()) {
-            try (ObjectInputStream ois = new ObjectInputStream(new FileInputStream(file))) {
+        if (new File(errorLogFile).exists()) {
+            try (ObjectInputStream ois = new ObjectInputStream(new FileInputStream(errorLogFile))) {
                 this.savedErrors = (List<String>) ois.readObject();
-            } catch (IOException | ClassNotFoundException e) {
-                e.printStackTrace();
+            } catch (IOException | ClassNotFoundException e) { e.printStackTrace(); }
+        }
+    }
+
+    public List<String> getSavedErrors() { return Collections.unmodifiableList(this.savedErrors); }
+
+    public List<File> scanDirectory(File directory) {
+        List<File> fileList = new ArrayList<>();
+        if (directory == null || !directory.isDirectory()) return fileList;
+
+        File[] files = directory.listFiles();
+        if (files != null) {
+            for (File file : files) {
+                if (!file.isHidden()) fileList.add(file);
             }
         }
+        return fileList;
     }
 
-    public List<String> getSavedErrors() {
-        return Collections.unmodifiableList(this.savedErrors);
-    }
+    public long getFileSize(File file) {
+        if (file == null || !file.exists()) return 0;
+        if (file.isFile()) return file.length();
 
-    // 파일 정리 기능을 위한 디렉토리 스캔
-    public void scanDirectory(File directory, DefaultTableModel model) {
-        File[] files = directory.listFiles();
-        if (files == null) return;
-
-        for (File file : files) {
-            if (file.isHidden()) continue; // 숨김 파일은 제외
-            Vector<String> row = new Vector<>();
-            row.add(file.getName());
-            row.add(formatSize(getFileSize(file)));
-            row.add(file.getAbsolutePath());
-            model.addRow(row);
-        }
-    }
-
-    private long getFileSize(File file) {
-        if (file.isFile()) {
-            return file.length();
-        }
-        if (file.isDirectory()) {
-            long length = 0;
-            File[] files = file.listFiles();
-            if (files != null) {
-                for (File f : files) {
-                    length += getFileSize(f);
+        long length = 0;
+        File[] files = file.listFiles();
+        if (files != null) {
+            for (File f : files) {
+                try {
+                    if (f.isFile()) {
+                        length += f.length();
+                    } else if (f.isDirectory() && !Files.isSymbolicLink(f.toPath())) {
+                        length += getFileSize(f);
+                    }
+                } catch (Exception e) {
+                    System.err.println("파일 크기 계산 중 오류 (건너뜀): " + f.getAbsolutePath());
                 }
             }
-            return length;
         }
-        return 0;
+        return length;
     }
 
-    private String formatSize(long size) {
-        if (size < 1024) return size + " B";
-        int exp = (int) (Math.log(size) / Math.log(1024));
-        String pre = "KMGTPE".charAt(exp - 1) + "";
-        return String.format("%.1f %sB", size / Math.pow(1024, exp), pre);
-    }
-
-    // 파일/디렉토리 삭제
     public void deleteFile(File file) {
         if (file.isDirectory()) {
             File[] files = file.listFiles();
             if (files != null) {
-                for (File f : files) {
-                    deleteFile(f);
-                }
+                for (File f : files) deleteFile(f);
             }
         }
-        if (!file.delete()) {
-            System.err.println(file.getAbsolutePath() + " 파일 삭제 실패");
-        }
+        if (!file.delete()) System.err.println(file.getAbsolutePath() + " 파일 삭제 실패");
     }
 }
 
-// 디스크 정리, 작업 관리자 등 외부 유틸리티 프로그램을 실행하는 역할을 하는 클래스
+// 외부 유틸리티 프로그램을 실행하는 클래스
 class ExternalExecutor {
-    private final HashMap<Integer, String> utilityMap;
 
-    public ExternalExecutor() {
-        utilityMap = new HashMap<>();
-        // 유틸리티 번호와 실행 명령어(또는 .msc 파일)를 매핑
-        utilityMap.put(1, "cleanmgr.exe");      // 디스크 정리
-        utilityMap.put(2, "dfrgui.exe");        // 디스크 조각 모음
-        utilityMap.put(3, "devmgmt.msc");       // 장치 관리자
-        utilityMap.put(4, "taskmgr.exe");       // 작업 관리자
-        utilityMap.put(5, "regedit.exe");       // 레지스트리 편집기
+    public void execute(String command, boolean needsAdmin, boolean isExpertTool) {
+        if (isExpertTool) {
+            int result = JOptionPane.showConfirmDialog(null,
+                    "이 도구는 시스템에 심각한 손상을 줄 수 있는 전문가용 기능입니다.\n계속하시겠습니까?",
+                    "경고", JOptionPane.YES_NO_OPTION, JOptionPane.WARNING_MESSAGE);
+            if (result != JOptionPane.YES_OPTION) return;
+        }
+
+        try {
+            if (needsAdmin) {
+                executeAsAdmin(command);
+            } else {
+                Runtime.getRuntime().exec("cmd /c " + command);
+            }
+        } catch (IOException e) {
+            JOptionPane.showMessageDialog(null, "유틸리티 실행 실패: " + e.getMessage(), "실행 오류", JOptionPane.ERROR_MESSAGE);
+        }
     }
 
-    public void executeUtility(int num) {
-        String command = utilityMap.get(num);
-        if (command != null) {
-            try {
-                // Windows 명령어를 실행
-                new ProcessBuilder(command).start();
-            } catch (IOException e) {
-                System.err.println("유틸리티 '" + command + "' 실행 실패: " + e.getMessage());
-                JOptionPane.showMessageDialog(null, "유틸리티를 실행할 수 없습니다.\n" + e.getMessage(), "실행 오류", JOptionPane.ERROR_MESSAGE);
-            }
-        } else {
-            System.err.println("유틸리티 번호 " + num + "를 찾을 수 없습니다.");
+    private void executeAsAdmin(String command) throws IOException {
+        String[] commandParts = command.split(" ", 2);
+        String executable = commandParts[0];
+        String args = commandParts.length > 1 ? commandParts[1] : "";
+
+        String script = "Set objShell = CreateObject(\"Shell.Application\")\n"
+                + "objShell.ShellExecute \"" + executable + "\", \"" + args + "\", \"\", \"runas\", 1";
+
+        File vbsFile = File.createTempFile("runas", ".vbs");
+        vbsFile.deleteOnExit();
+
+        try (PrintWriter writer = new PrintWriter(vbsFile)) {
+            writer.print(script);
         }
+
+        new ProcessBuilder("wscript.exe", vbsFile.getAbsolutePath()).start();
     }
 }
 
-// 설정된 주기가 지났는지 확인하기 위해 날짜를 계산하는 클래스
+// 주기 확인용 타이머 클래스
 class Timer {
-    private final String name;      // 타이머 상태 저장을 위한 파일 이름
-    private final int interval;     // 만료 기간 (일 단위)
-    private LocalDate resetDate;    // 마지막으로 초기화된 날짜
+    private final String name;
+    private final int interval;
+    private LocalDate resetDate;
 
     public Timer(String name, int interval) {
         this.name = name;
@@ -581,13 +789,10 @@ class Timer {
         this.resetDate = loadLastResetDate();
     }
 
-    // 타이머 만료 여부 확인
     public boolean checkTimer() {
-        long daysPassed = ChronoUnit.DAYS.between(resetDate, LocalDate.now());
-        return daysPassed >= interval;
+        return ChronoUnit.DAYS.between(resetDate, LocalDate.now()) >= interval;
     }
 
-    // 타이머를 현재 날짜로 초기화
     public void resetTimer() {
         this.resetDate = LocalDate.now();
         saveLastResetDate();
@@ -596,26 +801,84 @@ class Timer {
     private void saveLastResetDate() {
         try (BufferedWriter writer = new BufferedWriter(new FileWriter(name + ".dat"))) {
             writer.write(resetDate.toString());
-        } catch (IOException e) {
-            e.printStackTrace();
-        }
+        } catch (IOException e) { e.printStackTrace(); }
     }
 
     private LocalDate loadLastResetDate() {
         File file = new File(name + ".dat");
         if (file.exists()) {
             try {
-                String dateStr = new String(Files.readAllBytes(Paths.get(file.getPath())));
-                return LocalDate.parse(dateStr);
+                return LocalDate.parse(Files.readString(Paths.get(file.getPath())));
             } catch (Exception e) {
-                // 파일 읽기 실패 시 오늘 날짜로 초기화
-                System.err.println("타이머 파일 로딩 실패: " + e.getMessage());
+                System.err.println(name + ".dat 파일 로딩 실패.");
             }
         }
-        // 저장 파일이 없으면 오늘 날짜로 초기화하고 저장
         LocalDate today = LocalDate.now();
         this.resetDate = today;
         saveLastResetDate();
         return today;
+    }
+}
+
+// 파일 정리 기능의 테이블 셀 렌더러 (아이콘, 이름 표시)
+class FileCellRenderer extends DefaultTableCellRenderer {
+    @Override
+    public Component getTableCellRendererComponent(JTable table, Object value, boolean isSelected, boolean hasFocus, int row, int column) {
+        super.getTableCellRendererComponent(table, value, isSelected, hasFocus, row, column);
+        if (value instanceof File) {
+            File file = (File) value;
+            setIcon(FileSystemView.getFileSystemView().getSystemIcon(file));
+            setText(file.getName());
+        }
+        return this;
+    }
+}
+
+// 파일 정리 기능의 테이블 셀 렌더러 (크기 막대그래프 표시)
+class SizeBarRenderer extends JProgressBar implements TableCellRenderer {
+    private final AtomicLong maxFileSize;
+
+    public SizeBarRenderer(AtomicLong maxFileSize) {
+        super(0, 100);
+        this.maxFileSize = maxFileSize;
+        setStringPainted(true);
+        setBorderPainted(false);
+    }
+
+    @Override
+    public Component getTableCellRendererComponent(JTable table, Object value, boolean isSelected, boolean hasFocus, int row, int column) {
+        if (value instanceof Long) {
+            long size = (Long) value;
+            if (size == -1L) { // 아직 계산 중
+                setString("계산 중...");
+                setValue(0);
+            } else {
+                long max = maxFileSize.get();
+                setValue(max > 0 ? (int) (((double) size / max) * 100.0) : 0);
+                setString(formatSize(size));
+            }
+        }
+        return this;
+    }
+
+    private String formatSize(long size) {
+        if (size < 1024) return size + " B";
+        int exp = (int) (Math.log(size) / Math.log(1024));
+        char pre = "KMGTPE".charAt(exp - 1);
+        return String.format("%.1f %sB", size / Math.pow(1024, exp), pre);
+    }
+}
+
+// 파일 정리 기능의 테이블 셀 렌더러 (날짜 표시)
+class DateCellRenderer extends DefaultTableCellRenderer {
+    private final SimpleDateFormat formatter = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss");
+
+    @Override
+    public Component getTableCellRendererComponent(JTable table, Object value, boolean isSelected, boolean hasFocus, int row, int column) {
+        Component c = super.getTableCellRendererComponent(table, value, isSelected, hasFocus, row, column);
+        if (c instanceof JLabel && value instanceof Long) {
+            ((JLabel) c).setText(formatter.format(new Date((Long) value)));
+        }
+        return c;
     }
 }
