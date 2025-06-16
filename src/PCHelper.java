@@ -462,14 +462,19 @@ class UtilityManager {
             @Override
             protected Void doInBackground() throws Exception {
                 long currentMax = 0;
-                for (int i = 0; i < files.size(); i++) {
+                List<Long> sizes = new ArrayList<>();
+                for(int i=0; i<files.size(); i++){
                     if (isCancelled()) break;
                     File file = files.get(i);
                     long size = fileIOManager.getFileSize(file);
+                    sizes.add(size);
                     if (size > currentMax) currentMax = size;
-                    publish(new Object[]{i, size});
                 }
                 maxFileSize.set(currentMax);
+                for (int i = 0; i < sizes.size(); i++) {
+                    if (isCancelled()) break;
+                    publish(new Object[]{i, sizes.get(i)});
+                }
                 return null;
             }
 
@@ -567,7 +572,7 @@ class APIManager {
             return "API 키가 설정되지 않았습니다. 프로그램 폴더에 APIKey.txt 파일을 생성하고 키를 입력해주세요.";
         }
 
-        String url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent?key=" + apiKey;
+        String url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-latest:generateContent?key=" + apiKey;
         String escapedPrompt = prompt.replace("\"", "\\\"").replace("\n", "\\n");
         String jsonBody = "{\"contents\":[{\"parts\":[{\"text\":\"" + escapedPrompt + promptSuffix + "\"}]}]}";
 
@@ -583,10 +588,14 @@ class APIManager {
 
             if (response.statusCode() == 200) {
                 String responseBody = response.body();
-                int startIndex = responseBody.indexOf("\"text\": \"") + 9;
-                int endIndex = responseBody.lastIndexOf("\"");
-                if (startIndex > 8 && endIndex > startIndex) {
-                    return responseBody.substring(startIndex, endIndex).replace("\\n", "\n");
+                String searchText = "\"text\": \"";
+                int startIndex = responseBody.indexOf(searchText);
+                if (startIndex != -1) {
+                    startIndex += searchText.length();
+                    int endIndex = responseBody.indexOf("\"", startIndex);
+                    if (endIndex != -1) {
+                        return responseBody.substring(startIndex, endIndex).replace("\\n", "\n");
+                    }
                 }
                 return "답변을 파싱하는 데 실패했습니다: " + responseBody;
             } else {
@@ -658,10 +667,11 @@ class FileIOManager {
 
     public List<String> scanEvtForErrors() {
         List<String> errors = new ArrayList<>();
-        String command = "wevtutil qe System /q:\"*[System[(Level=1) and TimeCreated[timediff(@SystemTime) <= 86400000]]]\" /c:5 /f:text";
+        // **오류 수정**: chcp 65001 명령으로 콘솔을 UTF-8 모드로 변경 후 wevtutil 실행
+        String command = "cmd /c chcp 65001 > nul && wevtutil qe System /q:\"*[System[(Level=1) and TimeCreated[timediff(@SystemTime) <= 86400000]]]\" /c:5 /f:text";
         try {
             Process process = Runtime.getRuntime().exec(command);
-            try (BufferedReader reader = new BufferedReader(new InputStreamReader(process.getInputStream()))) {
+            try (BufferedReader reader = new BufferedReader(new InputStreamReader(process.getInputStream(), StandardCharsets.UTF_8))) {
                 String line;
                 while ((line = reader.readLine()) != null) errors.add(line);
             }
